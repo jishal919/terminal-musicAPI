@@ -1,0 +1,26 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "index.js",
+      "use": "@vercel/node"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "index.js"
+    }
+  ],
+  "env": {
+    "SAAVN_BASE_URL":        "https://saavn.sumit.co/api",
+    "CACHE_TTL_SEARCH":      "300",
+    "CACHE_TTL_METADATA":    "3600",
+    "MIN_CONFIDENCE_SCORE":  "0.35",
+    "MAX_SEARCH_CANDIDATES": "10",
+    "REQUEST_TIMEOUT_MS":    "7000",
+    "RATE_LIMIT_WINDOW_MS":  "60000",
+    "RATE_LIMIT_MAX":        "60",
+    "NODE_ENV":              "production"
+  }
+}
