@@ -39,9 +39,11 @@ async function search(req, res, next) {
     // ── Cache key includes all search-affecting params ───────────────────────
     const cacheKey = `search:${query.trim().toLowerCase()}:${MAX_CANDIDATES}`;
 
+    let actualFetched = 0;
     const results = await cache.search.memoize(cacheKey, async () => {
-      // Fetch more candidates than we'll return — the scorer needs room to work
       const candidates = await saavnService.searchSongs(query.trim(), MAX_CANDIDATES);
+      actualFetched = candidates.length;
+      console.log(`[search] Upstream returned ${actualFetched} candidates for "${query}"`);
 
       if (candidates.length === 0) return [];
 
@@ -66,7 +68,7 @@ async function search(req, res, next) {
       tracks,
       meta: {
         minScoreApplied: parsedMinScore,
-        candidatesFetched: MAX_CANDIDATES,
+        candidatesFetched: actualFetched || results.length, // use results.length if cached
         cached: cache.search.get(cacheKey) !== undefined,
       },
     });
