@@ -61,6 +61,8 @@ async function search(req, res, next) {
     // ── Build public response (strip internal fields from output) ────────────
     const tracks = filtered.map(formatTrackForResponse);
 
+    const isCached = cache.search.get(cacheKey) !== undefined;
+
     return res.json({
       success: true,
       query,
@@ -68,8 +70,8 @@ async function search(req, res, next) {
       tracks,
       meta: {
         minScoreApplied: parsedMinScore,
-        candidatesFetched: actualFetched || results.length, // use results.length if cached
-        cached: cache.search.get(cacheKey) !== undefined,
+        candidatesFetched: actualFetched || (isCached ? results.length : 0),
+        cached: isCached,
       },
     });
 

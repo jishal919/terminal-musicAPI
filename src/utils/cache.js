@@ -36,7 +36,10 @@ async function memoize(cache, key, fetchFn) {
   }
   console.debug(`[cache] MISS ${key}`);
   const value = await fetchFn();
-  if (value !== null && value !== undefined) {
+  
+  // Only cache if the value is not null, undefined, AND not an empty array
+  const isEmptyArray = Array.isArray(value) && value.length === 0;
+  if (value !== null && value !== undefined && !isEmptyArray) {
     cache.set(key, value);
   }
   return value;
