@@ -32,8 +32,14 @@ app.use((_req, res) => res.status(404).json({ success: false, error: 'Route not 
 // Centralised error handler (must be last)
 app.use(errorHandler);
 
-app.listen(PORT, () => {
-  console.log(`🎵 Music API running on http://localhost:${PORT}`);
-  console.log(`   MIN_CONFIDENCE : ${process.env.MIN_CONFIDENCE_SCORE || 0.35}`);
-  console.log(`   CACHE_TTL      : ${process.env.CACHE_TTL_SEARCH || 300}s (search)`);
-});
+// For Vercel deployment, we export the app. 
+// We only call app.listen() if we are running locally.
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => {
+    console.log(`🎵 Music API running on http://localhost:${PORT}`);
+    console.log(`   MIN_CONFIDENCE : ${process.env.MIN_CONFIDENCE_SCORE || 0.35}`);
+    console.log(`   CACHE_TTL      : ${process.env.CACHE_TTL_SEARCH || 300}s (search)`);
+  });
+}
+
+module.exports = app;
