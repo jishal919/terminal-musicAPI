@@ -137,8 +137,19 @@ async function searchSongs(query, limit = 10) {
   const url = `${BASE_URL}/search/songs?query=${encodeURIComponent(query)}&limit=${limit}`;
   const data = await getJSON(url);
 
-  const results = data?.data?.results;
-  if (!Array.isArray(results) || results.length === 0) return [];
+  // Handle different API versions: some use .data.results, some use .data
+  let results = data?.data?.results || data?.data;
+  
+  if (!Array.isArray(results)) {
+    // If it's a single object (some versions), wrap it in an array
+    if (results && typeof results === 'object' && results.id) {
+      results = [results];
+    } else {
+      results = [];
+    }
+  }
+
+  if (results.length === 0) return [];
 
   return results.map(mapSearchResult);
 }
@@ -154,8 +165,12 @@ async function getSongs(ids) {
   const url    = `${BASE_URL}/songs?ids=${encodeURIComponent(idList)}`;
   const data   = await getJSON(url);
 
-  const results = data?.data;
-  if (!Array.isArray(results) || results.length === 0) return [];
+  let results = data?.data?.results || data?.data;
+  if (!Array.isArray(results)) {
+    results = results ? [results] : [];
+  }
+
+  if (results.length === 0) return [];
 
   return results.map(mapSongDetail);
 }

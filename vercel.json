@@ -13,7 +13,7 @@
     }
   ],
   "env": {
-    "SAAVN_BASE_URL":        "https://saavn.sumit.co/api",
+    "SAAVN_BASE_URL":        "https://saavn.dev/api",
     "CACHE_TTL_SEARCH":      "300",
     "CACHE_TTL_METADATA":    "3600",
     "MIN_CONFIDENCE_SCORE":  "0.35",
