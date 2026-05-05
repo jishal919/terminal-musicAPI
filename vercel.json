@@ -13,7 +13,7 @@
     }
   ],
   "env": {
-    "SAAVN_BASE_URL":        "https://saavn.api.nodesense.ai/api",
+    "SAAVN_BASE_URL":        "https://jiosaavn-api-beta.vercel.app",
     "CACHE_TTL_SEARCH":      "300",
     "CACHE_TTL_METADATA":    "3600",
     "MIN_CONFIDENCE_SCORE":  "0.35",
