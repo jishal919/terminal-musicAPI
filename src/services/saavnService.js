@@ -133,8 +133,8 @@ function mapSongDetail(raw) {
  * @param {number} [limit=10]
  * @returns {Promise<object[]>}  array of mapped Track objects
  */
-async function searchSongs(query, limit = 10) {
-  const url = `${BASE_URL}/search/songs?query=${encodeURIComponent(query)}&limit=${limit}`;
+async function searchSongs(query, limit = 10, language = 'english,hindi') {
+  const url = `${BASE_URL}/search/songs?query=${encodeURIComponent(query)}&limit=${limit}&language=${encodeURIComponent(language)}`;
   const data = await getJSON(url);
 
   // Handle different API versions: some use .data.results, some use .data

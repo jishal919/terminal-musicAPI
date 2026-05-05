@@ -15,7 +15,7 @@ const MAX_CANDIDATES = parseInt(process.env.MAX_SEARCH_CANDIDATES || '10', 10);
 
 async function search(req, res, next) {
   try {
-    const { query, limit, minScore, duration } = req.query;
+    const { query, limit, minScore, duration, language } = req.query;
 
     // ── Input validation ────────────────────────────────────────────────────
     if (!query || query.trim().length < 1) {
@@ -28,6 +28,7 @@ async function search(req, res, next) {
     const parsedLimit    = Math.min(parseInt(limit    || '5', 10), 20);
     const parsedMinScore = parseFloat(minScore || MIN_CONFIDENCE);
     const parsedDuration = duration ? parseFloat(duration) : null;
+    const searchLang     = language || process.env.DEFAULT_LANGUAGE || 'english,hindi';
 
     if (isNaN(parsedMinScore) || parsedMinScore < 0 || parsedMinScore > 1) {
       return res.status(400).json({
@@ -37,13 +38,13 @@ async function search(req, res, next) {
     }
 
     // ── Cache key includes all search-affecting params ───────────────────────
-    const cacheKey = `search:${query.trim().toLowerCase()}:${MAX_CANDIDATES}`;
+    const cacheKey = `search:${query.trim().toLowerCase()}:${searchLang}:${MAX_CANDIDATES}`;
 
     let actualFetched = 0;
     const results = await cache.search.memoize(cacheKey, async () => {
-      const candidates = await saavnService.searchSongs(query.trim(), MAX_CANDIDATES);
+      const candidates = await saavnService.searchSongs(query.trim(), MAX_CANDIDATES, searchLang);
       actualFetched = candidates.length;
-      console.log(`[search] Upstream returned ${actualFetched} candidates for "${query}"`);
+      console.log(`[search] Upstream returned ${actualFetched} candidates for "${query}" (lang: ${searchLang})`);
 
       if (candidates.length === 0) return [];
 
