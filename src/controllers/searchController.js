@@ -4,14 +4,16 @@
  * GET /api/search?query=<string>&limit=<number>&minScore=<0-1>&duration=<seconds>
  *
  * Orchestrates:
- *   saavnService.searchSongs  →  scoringService.rankCandidates  →  response
+ *   providerRegistry (Parallel Fetch) → scoringService.rankCandidates → response
  */
 
-const saavnService  = require('../services/saavnService');
+const PROVIDERS = require('../services/providers');
 const { rankCandidates, MIN_CONFIDENCE } = require('../services/scoringService');
 const cache = require('../utils/cache');
 
-const MAX_CANDIDATES = parseInt(process.env.MAX_SEARCH_CANDIDATES || '10', 10);
+// Result limits to prevent serverless execution overhead
+const MAX_SAAVN   = 40;
+const MAX_ARCHIVE = 25;
 
 async function search(req, res, next) {
   try {
@@ -36,20 +38,43 @@ async function search(req, res, next) {
       });
     }
 
-    // ── Cache key includes all search-affecting params ───────────────────────
-    const cacheKey = `search:${query.trim().toLowerCase()}:${MAX_CANDIDATES}`;
+    // ── Cache key includes query and base candidate pool ────────────────────
+    const cacheKey = `search:${query.trim().toLowerCase()}`;
 
     let actualFetched = 0;
     const results = await cache.search.memoize(cacheKey, async () => {
-      const candidates = await saavnService.searchSongs(query.trim(), MAX_CANDIDATES);
-      actualFetched = candidates.length;
-      console.log(`[search] Upstream returned ${actualFetched} candidates for "${query}"`);
+      // Parallel fetch from all registered providers
+      const providerKeys = Object.keys(PROVIDERS);
+      
+      const settlements = await Promise.allSettled(
+        providerKeys.map(key => {
+          const limit = key === 'saavn' ? MAX_SAAVN : MAX_ARCHIVE;
+          return PROVIDERS[key].search(query.trim(), limit);
+        })
+      );
 
-      if (candidates.length === 0) return [];
+      const combinedCandidates = [];
+      const stats = {};
 
-      return rankCandidates(candidates, query.trim(), {
+      settlements.forEach((s, i) => {
+        const key = providerKeys[i];
+        if (s.status === 'rejected') {
+          console.error(`[search] Provider "${key}" failed:`, s.reason.message);
+        }
+        const candidates = s.status === 'fulfilled' ? s.value : [];
+        stats[key] = candidates.length;
+        combinedCandidates.push(...candidates);
+      });
+
+      actualFetched = combinedCandidates.length;
+      console.log(`[search] Aggregated ${actualFetched} candidates`, stats);
+
+      if (combinedCandidates.length === 0) return [];
+
+      return rankCandidates(combinedCandidates, query.trim(), {
         minScore:      parsedMinScore,
         queryDuration: parsedDuration,
+        sourceBiases:  { saavn: 0.03 } // Saavn metadata is slightly more reliable
       });
     });
 
@@ -72,6 +97,7 @@ async function search(req, res, next) {
         minScoreApplied: parsedMinScore,
         candidatesFetched: actualFetched || (isCached ? results.length : 0),
         cached: isCached,
+        sources: Object.keys(PROVIDERS)
       },
     });
 
@@ -94,6 +120,7 @@ function formatTrackForResponse(track) {
     thumbnail:      track.thumbnail,
     language:       track.language,
     year:           track.year,
+    source:         track.source,
     confidence:     track._confidence,
     scoreBreakdown: track._scoreBreakdown,
   };

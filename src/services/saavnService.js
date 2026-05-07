@@ -4,13 +4,16 @@
  * All communication with the JioSaavn public API lives here.
  * Controllers and the scoring service never touch fetch() directly.
  *
- * Base URL: https://saavn.sumit.co/api
+ * Base URL: https://jiosaavn-api-beta.vercel.app
  */
 
 const fetch = require('node-fetch');
 
-const BASE_URL = (process.env.SAAVN_BASE_URL || 'https://saavn.sumit.co/api').replace(/\/$/, '');
+// Using a more stable public instance
+const BASE_URL = (process.env.SAAVN_BASE_URL || 'https://jiosaavn-api-beta.vercel.app').replace(/\/$/, '');
 const TIMEOUT  = parseInt(process.env.REQUEST_TIMEOUT_MS || '7000', 10);
+
+const QUALITY_LADDER = ['320kbps', '160kbps', '96kbps', '48kbps', '12kbps'];
 
 // ── Low-level HTTP helper ───────────────────────────────────────────────────
 
@@ -29,7 +32,7 @@ async function getJSON(url) {
     const response = await fetch(url, { signal: controller.signal });
     if (!response.ok) {
       throw Object.assign(new Error(`Upstream HTTP ${response.status}`), {
-        statusCode: 502,
+        statusCode: response.status === 429 ? 429 : 502,
         upstream: url,
       });
     }
@@ -56,20 +59,17 @@ async function getJSON(url) {
  * @returns {object} Track
  */
 function mapSearchResult(raw) {
-  const primaryArtist =
-    raw.artists?.primary?.[0]?.name ||
-    raw.primaryArtists ||
-    'Unknown';
-
-  const allArtists = (raw.artists?.primary || [])
-    .map(a => a.name)
-    .join(', ') || primaryArtist;
+  const primaryArtist = raw.primaryArtists || 'Unknown';
 
   const durationSec = raw.duration ? parseInt(raw.duration, 10) : null;
 
   // Pick the best thumbnail — prefer 500px, fall back down
+  // Note: New API instance uses 'link' instead of 'url' in image array
   const images = raw.image || [];
   const thumbnail =
+    (images.find(i => i.quality === '500x500') ||
+     images.find(i => i.quality === '150x150') ||
+     images[images.length - 1])?.link || 
     (images.find(i => i.quality === '500x500') ||
      images.find(i => i.quality === '150x150') ||
      images[images.length - 1])?.url || null;
@@ -77,7 +77,7 @@ function mapSearchResult(raw) {
   return {
     id:          raw.id,
     title:       raw.name || raw.song || '',
-    artist:      allArtists,
+    artist:      primaryArtist,
     album:       raw.album?.name || raw.album || null,
     durationSec,
     duration:    durationSec ? formatDuration(durationSec) : null,
@@ -85,42 +85,24 @@ function mapSearchResult(raw) {
     language:    raw.language || null,
     year:        raw.year || null,
     hasLyrics:   raw.hasLyrics === 'true' || raw.hasLyrics === true,
+    source:      'saavn'
   };
 }
 
 /**
  * Map a raw Saavn song detail item to our internal Track shape.
- * The /songs endpoint returns richer data than /search/songs.
- *
- * @param {object} raw
- * @returns {object} Track
  */
 function mapSongDetail(raw) {
   const base = mapSearchResult(raw);
 
-  const images  = raw.image || [];
-  const coverHQ =
-    (images.find(i => i.quality === '500x500') ||
-     images[images.length - 1])?.url || null;
-
   const downloadUrls = (raw.downloadUrl || []).map(u => ({
     quality: u.quality,
-    url:     u.url,
+    url:     u.link || u.url, // Handle both structures
   }));
-
-  // Highest quality stream — last item is typically 320kbps on Saavn
-  const bestStream = downloadUrls[downloadUrls.length - 1] || null;
 
   return {
     ...base,
-    coverHQ,
-    releaseDate:  raw.releaseDate || null,
-    label:        raw.label || null,
-    copyright:    raw.copyright || null,
-    playCount:    raw.playCount ? parseInt(raw.playCount, 10) : null,
-    downloadUrls,
-    streamUrl:    bestStream?.url   || null,
-    streamQuality: bestStream?.quality || null,
+    downloadUrls
   };
 }
 
@@ -133,57 +115,65 @@ function mapSongDetail(raw) {
  * @param {number} [limit=10]
  * @returns {Promise<object[]>}  array of mapped Track objects
  */
-async function searchSongs(query, limit = 10) {
+async function search(query, limit = 10) {
   const url = `${BASE_URL}/search/songs?query=${encodeURIComponent(query)}&limit=${limit}`;
   const data = await getJSON(url);
 
-  // Handle different API versions: some use .data.results, some use .data
-  let results = data?.data?.results || data?.data;
+  // New API instance returns data in .data.results
+  const results = data?.data?.results || data?.data || [];
   
-  if (!Array.isArray(results)) {
-    // If it's a single object (some versions), wrap it in an array
-    if (results && typeof results === 'object' && results.id) {
-      results = [results];
-    } else {
-      results = [];
-    }
-  }
-
-  if (results.length === 0) return [];
+  if (!Array.isArray(results)) return [];
 
   return results.map(mapSearchResult);
 }
 
 /**
- * Fetch full details for one or more song IDs.
- *
- * @param {string|string[]} ids
- * @returns {Promise<object[]>}  array of mapped Track objects
+ * Get the best available audio stream for a Saavn song ID.
  */
-async function getSongs(ids) {
-  const idList = Array.isArray(ids) ? ids.join(',') : ids;
-  const url    = `${BASE_URL}/songs?ids=${encodeURIComponent(idList)}`;
-  const data   = await getJSON(url);
+async function getStream(id) {
+  // New API uses ?id= instead of ?ids= for single song
+  const url = `${BASE_URL}/songs?id=${encodeURIComponent(id)}`;
+  const data = await getJSON(url);
 
-  let results = data?.data?.results || data?.data;
-  if (!Array.isArray(results)) {
-    results = results ? [results] : [];
+  const results = data?.data || [];
+  const songRaw = Array.isArray(results) ? results[0] : results;
+  
+  if (!songRaw) return null;
+
+  const song = mapSongDetail(songRaw);
+  const { downloadUrls } = song;
+  
+  if (!downloadUrls || downloadUrls.length === 0) return null;
+
+  // Pick best quality available from the ladder
+  let bestUrl = null;
+  let bestQuality = null;
+
+  for (const preferred of QUALITY_LADDER) {
+    const match = downloadUrls.find(u =>
+      u.quality?.toLowerCase() === preferred.toLowerCase()
+    );
+    if (match?.url) {
+      bestUrl = match.url;
+      bestQuality = match.quality;
+      break;
+    }
   }
 
-  if (results.length === 0) return [];
+  if (!bestUrl) {
+    const last = downloadUrls[downloadUrls.length - 1];
+    bestUrl = last?.url;
+    bestQuality = last?.quality;
+  }
 
-  return results.map(mapSongDetail);
-}
+  if (!bestUrl) return null;
 
-/**
- * Convenience: get a single song by ID.
- *
- * @param {string} id
- * @returns {Promise<object|null>}
- */
-async function getSong(id) {
-  const songs = await getSongs([id]);
-  return songs[0] || null;
+  return {
+    streamUrl: bestUrl,
+    source: 'saavn',
+    quality: bestQuality,
+    format: 'mp4'
+  };
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -195,4 +185,4 @@ function formatDuration(seconds) {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
-module.exports = { searchSongs, getSongs, getSong };
+module.exports = { search, getStream };
