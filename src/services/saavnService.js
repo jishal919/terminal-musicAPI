@@ -9,8 +9,15 @@
 
 const fetch = require('node-fetch');
 
-// Using a more stable public instance
-const BASE_URL = (process.env.SAAVN_BASE_URL || 'https://jiosaavn-api-beta.vercel.app').replace(/\/$/, '');
+const NEW_STABLE_INSTANCE = 'https://jiosaavn-api-beta.vercel.app';
+const OLD_BROKEN_INSTANCE = 'https://saavn.sumit.co/api';
+
+let BASE_URL = (process.env.SAAVN_BASE_URL || NEW_STABLE_INSTANCE).replace(/\/$/, '');
+
+// Safety check: If .env is pointing to the old broken instance, force the new stable one
+if (BASE_URL === OLD_BROKEN_INSTANCE) {
+  BASE_URL = NEW_STABLE_INSTANCE;
+}
 const TIMEOUT  = parseInt(process.env.REQUEST_TIMEOUT_MS || '7000', 10);
 
 const QUALITY_LADDER = ['320kbps', '160kbps', '96kbps', '48kbps', '12kbps'];
