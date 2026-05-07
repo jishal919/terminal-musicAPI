@@ -14,24 +14,26 @@ async function stream(req, res, next) {
   try {
     const { id, source } = req.query;
 
-    // ── 1. Strict Validation ────────────────────────────────────────────────
+    // ── 1. Input Validation & Defaults ──────────────────────────────────────
     if (!id || !id.trim()) {
       return res.status(400).json({ success: false, error: 'Missing `id` parameter' });
     }
 
-    if (!source || !PROVIDERS[source]) {
+    // Backward compatibility: default to 'saavn' if source is missing
+    const resolvedSource = (source || 'saavn').toLowerCase();
+
+    if (!PROVIDERS[resolvedSource]) {
       return res.status(400).json({ 
         success: false, 
-        error: `Invalid or missing \`source\`. Supported: ${Object.keys(PROVIDERS).join(', ')}` 
+        error: `Invalid \`source\`. Supported: ${Object.keys(PROVIDERS).join(', ')}` 
       });
     }
 
-    const cacheKey = `stream:${source}:${id.trim()}`;
+    const cacheKey = `stream:${resolvedSource}:${id.trim()}`;
 
     // ── 2. Resolve via Provider Registry ────────────────────────────────────
-    // Using a shorter TTL for streams as CDN URLs can expire
     const data = await cache.metadata.memoize(cacheKey, async () => {
-      const provider = PROVIDERS[source];
+      const provider = PROVIDERS[resolvedSource];
       const result = await provider.getStream(id.trim());
       
       if (!result) return null;
