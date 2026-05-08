@@ -32,7 +32,9 @@ const REQUEST_TIMEOUT = 7000;
 const PIPED_INSTANCES = [
   'https://pipedapi.kavin.rocks',
   'https://pipedapi.adminforge.de',
-  'https://api.piped.yt',
+  'https://api-piped.mha.fi',
+  'https://pipedapi.leptons.xyz',
+  'https://pipedapi.university',
   'https://piped-api.garudalinux.org',
 ];
 
@@ -185,7 +187,8 @@ function formatSongResult(ytSong, index) {
 
   // Saavn returns primary artists as array; YTMusic gives artist object
   const artistName = ytSong.artist?.name
-    || ytSong.artists?.map(a => a.name).join(', ')
+    || (Array.isArray(ytSong.artists) ? ytSong.artists.map(a => a.name || a).join(', ') : null)
+    || (typeof ytSong.artist === 'string' ? ytSong.artist : null)
     || 'Unknown Artist';
 
   return {
@@ -326,18 +329,31 @@ async function metadata(videoId) {
   if (cached) return { ...cached, fromCache: true };
 
   const startMs = Date.now();
+  let yt = await getYTMusicClient();
 
   try {
-    const yt = await getYTMusicClient();
-
     // getSong gives richer data than search result
-    const [song, upNext] = await Promise.allSettled([
+    const [songSettlement, upNextSettlement] = await Promise.allSettled([
       yt.getSong(videoId),
       yt.getUpNexts(videoId),
     ]);
 
-    const s = song.status === 'fulfilled' ? song.value : null;
-    if (!s) throw new Error('Song not found');
+    if (songSettlement.status === 'rejected') {
+      logger.error(`yt.getSong failed for ${videoId}`, { error: songSettlement.reason.message });
+      
+      // If it failed, maybe the client is stale. Let's try re-initializing once.
+      logger.info('Attempting to re-initialize YTMusic client...');
+      ytMusicClient = null;
+      yt = await getYTMusicClient();
+      const retrySong = await yt.getSong(videoId);
+      
+      // If retry succeeds, we continue. If it fails, it will catch below.
+      songSettlement.value = retrySong;
+      songSettlement.status = 'fulfilled';
+    }
+
+    const s = songSettlement.value;
+    if (!s) throw new Error('Song data is empty');
 
     // Get lyrics if available
     let lyrics = null;
@@ -348,16 +364,19 @@ async function metadata(videoId) {
 
     const result = {
       videoId,
-      name:       s.name || s.title,
-      artist:     s.artist?.name || s.artists?.map(a => a.name).join(', ') || 'Unknown',
-      album:      s.album?.name || null,
+      name:       s.name || s.title || 'Unknown',
+      artist:     s.artist?.name
+        || (Array.isArray(s.artists) ? s.artists.map(a => a.name || a).join(', ') : null)
+        || (typeof s.artist === 'string' ? s.artist : null)
+        || 'Unknown',
+      album:      s.album?.name || s.album || null,
       duration:   s.duration || null,
       year:       s.year || null,
       explicit:   s.isExplicit || false,
       thumbnails: s.thumbnails || [],
       lyrics:     lyrics,
-      upNext:     upNext.status === 'fulfilled'
-        ? (upNext.value || []).slice(0, 5).map((t, i) => formatSongResult(t, i))
+      upNext:     upNextSettlement.status === 'fulfilled'
+        ? (upNextSettlement.value || []).slice(0, 5).map((t, i) => formatSongResult(t, i))
         : [],
       processingMs: Date.now() - startMs,
     };
@@ -366,9 +385,10 @@ async function metadata(videoId) {
     return result;
 
   } catch (err) {
+    logger.error('Metadata fetch failed', { videoId, error: err.message });
     throw Object.assign(
       new Error(`Metadata fetch failed: ${err.message}`),
-      { statusCode: 404, code: 'NOT_FOUND' }
+      { statusCode: err.statusCode || 404, code: 'NOT_FOUND' }
     );
   }
 }
