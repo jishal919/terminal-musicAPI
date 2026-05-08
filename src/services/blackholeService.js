@@ -320,77 +320,112 @@ async function stream(videoId, options = {}) {
  * metadata(videoId)
  *
  * Get full song metadata from YouTube Music by videoId.
+ * Falls back to Piped API if YTMusic fails (often happens on Vercel/Serverless).
  */
 async function metadata(videoId) {
-  if (!videoId?.trim()) throw Object.assign(new Error('videoId is required'), { statusCode: 400 });
+  const id = videoId?.trim();
+  if (!id || id.length < 10) {
+    throw Object.assign(new Error('Invalid or missing videoId'), { statusCode: 400 });
+  }
 
-  const cacheKey = `bh:meta:${videoId}`;
+  const cacheKey = `bh:meta:${id}`;
   const cached = cache.metadata.get(cacheKey);
   if (cached) return { ...cached, fromCache: true };
 
+  logger.info(`Fetching metadata for: ${id}`);
   const startMs = Date.now();
-  let yt = await getYTMusicClient();
 
+  // ── TRY YT MUSIC FIRST ─────────────────────────────────────────
   try {
-    // getSong gives richer data than search result
+    const yt = await getYTMusicClient();
     const [songSettlement, upNextSettlement] = await Promise.allSettled([
-      yt.getSong(videoId),
-      yt.getUpNexts(videoId),
+      yt.getSong(id),
+      yt.getUpNexts(id),
     ]);
 
-    if (songSettlement.status === 'rejected') {
-      logger.error(`yt.getSong failed for ${videoId}`, { error: songSettlement.reason.message });
-      
-      // If it failed, maybe the client is stale. Let's try re-initializing once.
-      logger.info('Attempting to re-initialize YTMusic client...');
-      ytMusicClient = null;
-      yt = await getYTMusicClient();
-      const retrySong = await yt.getSong(videoId);
-      
-      // If retry succeeds, we continue. If it fails, it will catch below.
-      songSettlement.value = retrySong;
-      songSettlement.status = 'fulfilled';
+    if (songSettlement.status === 'fulfilled' && songSettlement.value) {
+      const s = songSettlement.value;
+      let lyrics = null;
+      try {
+        const lyricsData = await yt.getLyrics(id);
+        lyrics = lyricsData?.lyrics || null;
+      } catch { /* lyrics optional */ }
+
+      const result = {
+        videoId: id,
+        name:    s.name || s.title || 'Unknown',
+        artist:  s.artist?.name
+          || (Array.isArray(s.artists) ? s.artists.map(a => a.name || a).join(', ') : null)
+          || (typeof s.artist === 'string' ? s.artist : null)
+          || 'Unknown',
+        album:      s.album?.name || s.album || null,
+        duration:   s.duration || null,
+        year:       s.year || null,
+        explicit:   s.isExplicit || false,
+        thumbnails: s.thumbnails || [],
+        lyrics:     lyrics,
+        upNext:     upNextSettlement.status === 'fulfilled'
+          ? (upNextSettlement.value || []).slice(0, 5).map((t, i) => formatSongResult(t, i))
+          : [],
+        processingMs: Date.now() - startMs,
+        source: 'youtube_music',
+      };
+      cache.metadata.set(cacheKey, result);
+      return result;
     }
-
-    const s = songSettlement.value;
-    if (!s) throw new Error('Song data is empty');
-
-    // Get lyrics if available
-    let lyrics = null;
-    try {
-      const lyricsData = await yt.getLyrics(videoId);
-      lyrics = lyricsData?.lyrics || null;
-    } catch { /* lyrics optional */ }
-
-    const result = {
-      videoId,
-      name:       s.name || s.title || 'Unknown',
-      artist:     s.artist?.name
-        || (Array.isArray(s.artists) ? s.artists.map(a => a.name || a).join(', ') : null)
-        || (typeof s.artist === 'string' ? s.artist : null)
-        || 'Unknown',
-      album:      s.album?.name || s.album || null,
-      duration:   s.duration || null,
-      year:       s.year || null,
-      explicit:   s.isExplicit || false,
-      thumbnails: s.thumbnails || [],
-      lyrics:     lyrics,
-      upNext:     upNextSettlement.status === 'fulfilled'
-        ? (upNextSettlement.value || []).slice(0, 5).map((t, i) => formatSongResult(t, i))
-        : [],
-      processingMs: Date.now() - startMs,
-    };
-
-    cache.metadata.set(cacheKey, result);
-    return result;
-
+    
+    logger.warn(`YTMusic.getSong failed or empty for ${id}`, { 
+      reason: songSettlement.reason?.message || 'Empty response' 
+    });
   } catch (err) {
-    logger.error('Metadata fetch failed', { videoId, error: err.message });
-    throw Object.assign(
-      new Error(`Metadata fetch failed: ${err.message}`),
-      { statusCode: err.statusCode || 404, code: 'NOT_FOUND' }
-    );
+    logger.warn(`YTMusic metadata attempt failed for ${id}`, { error: err.message });
   }
+
+  // ── FALLBACK: TRY PIPED API ────────────────────────────────────
+  // If YTMusic fails, Piped is a great source for basic metadata.
+  logger.info(`Attempting Piped fallback for metadata: ${id}`);
+  
+  for (const instance of PIPED_INSTANCES) {
+    try {
+      const res = await axios.get(`${instance}/streams/${id}`, {
+        timeout: 5000,
+        headers: HEADERS,
+      });
+
+      const d = res.data;
+      if (!d.title) continue;
+
+      const result = {
+        videoId: id,
+        name:    d.title,
+        artist:  d.uploader || d.uploaderName || 'Unknown',
+        album:   null,
+        duration: d.duration || null,
+        year:     null,
+        explicit: false,
+        thumbnails: d.thumbnailUrl ? [{ url: d.thumbnailUrl }] : [],
+        lyrics:   null,
+        upNext:   (d.relatedStreams || []).slice(0, 5).map(s => ({
+          videoId:   s.url?.split('v=')[1] || s.url?.split('/').pop(),
+          name:      s.title,
+          artist:    s.uploaderName || s.uploader,
+          thumbnail: s.thumbnail,
+        })),
+        processingMs: Date.now() - startMs,
+        source: `piped_fallback (${new URL(instance).hostname})`,
+      };
+
+      cache.metadata.set(cacheKey, result);
+      return result;
+    } catch (e) {
+      logger.debug(`Piped metadata fallback failed for ${instance}: ${e.message}`);
+    }
+  }
+
+  throw Object.assign(
+    new Error(`Could not fetch metadata from any source for ID: ${id}`),
+    { statusCode: 404, code: 'NOT_FOUND' }
+  );
 }
 
 /**
