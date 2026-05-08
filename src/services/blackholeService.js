@@ -23,6 +23,8 @@ const axios = require('axios');
 const YTMusic = require('ytmusic-api');
 const cache = require('../utils/cache');
 const logger = require('../utils/logger');
+const saavn = require('./saavnService');
+const archive = require('./archiveService');
 
 // ── CONFIG ────────────────────────────────────────────────────────
 
@@ -31,11 +33,15 @@ const REQUEST_TIMEOUT = 7000;
 // Multiple Piped instances — we try them in order, fall back if one is down
 const PIPED_INSTANCES = [
   'https://pipedapi.kavin.rocks',
-  'https://pipedapi.adminforge.de',
-  'https://api-piped.mha.fi',
+  'https://pipedapi.lunar.icu',
+  'https://pipedapi.mha.fi',
   'https://pipedapi.leptons.xyz',
+  'https://pipedapi.adminforge.de',
   'https://pipedapi.university',
   'https://piped-api.garudalinux.org',
+  'https://pipedapi.drgns.space',
+  'https://pipedapi.astreams.me',
+  'https://piped-api.us.to',
 ];
 
 const SAAVN_BASE = 'https://saavn.sumit.co/api';
@@ -274,28 +280,41 @@ async function stream(videoId, options = {}) {
 
   const startMs = Date.now();
 
-  // Detect if this looks like a Saavn ID (alphanumeric, no underscores/dashes, ~8 chars)
-  const looksLikeSaavnId = /^[a-zA-Z0-9]{6,12}$/.test(videoId) && !videoId.includes('-');
-
   let streamData;
   let usedSource = 'piped';
 
   try {
-    // Always try Piped first (works for YouTube Music videoIds)
+    // 1. Try Piped first (YouTube)
     streamData = await resolveStreamFromPiped(videoId);
   } catch (pipedErr) {
     logger.warn('Piped failed, trying Saavn fallback', { videoId, error: pipedErr.message });
 
     if (songName) {
       try {
+        // 2. Try Saavn fallback
         streamData = await resolveStreamFromSaavn(songName, artist);
         usedSource = 'saavn';
       } catch (saavnErr) {
-        logger.error('Both Piped and Saavn failed', { videoId });
-        throw Object.assign(
-          new Error(`Could not resolve stream. Piped: ${pipedErr.message}. Saavn: ${saavnErr.message}`),
-          { statusCode: 503, code: 'STREAM_UNAVAILABLE' }
-        );
+        logger.warn('Saavn fallback failed, trying Archive fallback', { videoId, error: saavnErr.message });
+        
+        try {
+          // 3. Try Archive fallback (using search + getStream)
+          const archiveResults = await archive.search(`${songName} ${artist || ''}`, 1);
+          if (archiveResults.length > 0) {
+            streamData = await archive.getStream(archiveResults[0].id);
+            if (streamData) {
+              usedSource = 'archive';
+            }
+          }
+          
+          if (!streamData) throw new Error('No archive results found');
+        } catch (archiveErr) {
+          logger.error('All stream sources failed (Piped, Saavn, Archive)', { videoId });
+          throw Object.assign(
+            new Error(`Could not resolve stream. Piped: ${pipedErr.message}. Saavn: ${saavnErr.message}. Archive: ${archiveErr.message}`),
+            { statusCode: 503, code: 'STREAM_UNAVAILABLE' }
+          );
+        }
       }
     } else {
       throw Object.assign(
