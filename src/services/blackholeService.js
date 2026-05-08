@@ -373,16 +373,48 @@ async function metadata(videoId) {
       cache.metadata.set(cacheKey, result);
       return result;
     }
-    
-    logger.warn(`YTMusic.getSong failed or empty for ${id}`, { 
-      reason: songSettlement.reason?.message || 'Empty response' 
-    });
+
+    // Try YT Search fallback (searching for the ID often works when getSong fails)
+    const searchResults = await yt.searchSongs(id);
+    const match = searchResults.find(r => r.videoId === id);
+    if (match) {
+      const result = {
+        ...formatSongResult(match, 0),
+        source: 'youtube_music_search_fallback',
+        processingMs: Date.now() - startMs,
+      };
+      cache.metadata.set(cacheKey, result);
+      return result;
+    }
   } catch (err) {
     logger.warn(`YTMusic metadata attempt failed for ${id}`, { error: err.message });
   }
 
-  // ── FALLBACK: TRY PIPED API ────────────────────────────────────
-  // If YTMusic fails, Piped is a great source for basic metadata.
+  // ── FALLBACK 2: OFFICIAL YOUTUBE OEMBED (Super Reliable) ───────
+  try {
+    const oembedRes = await axios.get(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${id}&format=json`, {
+      timeout: 4000
+    });
+    if (oembedRes.data && oembedRes.data.title) {
+      const d = oembedRes.data;
+      const result = {
+        videoId: id,
+        name:    d.title,
+        artist:  d.author_name || 'Unknown',
+        album:   null,
+        duration: null,
+        thumbnails: [{ url: d.thumbnail_url }],
+        source: 'youtube_oembed',
+        processingMs: Date.now() - startMs,
+      };
+      cache.metadata.set(cacheKey, result);
+      return result;
+    }
+  } catch (e) {
+    logger.debug(`oEmbed fallback failed: ${e.message}`);
+  }
+
+  // ── FALLBACK 3: TRY PIPED API ────────────────────────────────────
   logger.info(`Attempting Piped fallback for metadata: ${id}`);
   
   for (const instance of PIPED_INSTANCES) {
