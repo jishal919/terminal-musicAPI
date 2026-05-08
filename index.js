@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const routes = require('./src/routes');
+const bhController = require('./src/controllers/blackholeController');
 const errorHandler = require('./src/middleware/errorHandler');
 const rateLimiter = require('./src/middleware/rateLimiter');
 
@@ -22,6 +23,12 @@ app.use((req, _res, next) => {
 
 // ── Routes ─────────────────────────────────────────────────────────────────
 app.use('/api', routes);
+
+// Blackhole API routes
+app.get('/bh/search',            bhController.search);
+app.get('/bh/stream/:videoId',   bhController.stream);
+app.get('/bh/metadata/:videoId', bhController.metadata);
+app.get('/bh/trending',          bhController.trending);
 
 // Health check
 app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
