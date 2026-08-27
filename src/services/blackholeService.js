@@ -527,4 +527,4 @@ async function trending(region = 'IN') {
   }
 }
 
-module.exports = { search, stream, metadata, trending };    
+module.exports = { search, stream, metadata, trending, resolveStreamFromPiped };    

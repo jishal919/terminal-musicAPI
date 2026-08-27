@@ -14,6 +14,9 @@ const cache = require('../utils/cache');
 // Result limits to prevent serverless execution overhead
 const MAX_SAAVN   = 40;
 const MAX_ARCHIVE = 25;
+const MAX_YOUTUBE = 15;
+
+const PROVIDER_LIMITS = { saavn: MAX_SAAVN, archive: MAX_ARCHIVE, youtube: MAX_YOUTUBE };
 
 async function search(req, res, next) {
   try {
@@ -48,7 +51,7 @@ async function search(req, res, next) {
       
       const settlements = await Promise.allSettled(
         providerKeys.map(key => {
-          const limit = key === 'saavn' ? MAX_SAAVN : MAX_ARCHIVE;
+          const limit = PROVIDER_LIMITS[key] || 10;
           return PROVIDERS[key].search(query.trim(), limit);
         })
       );
